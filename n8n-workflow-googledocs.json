@@ -1,0 +1,436 @@
+{
+  "name": "Playbook Update Agent - Google Docs",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "updateplaybook",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Slash Command Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "position": [240, 300],
+      "typeVersion": 1,
+      "notes": "Copy this webhook URL and paste it into your Slack app Slash Commands → Request URL at api.slack.com"
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "Got it; reviewing your request now. I will post a draft in this channel shortly.",
+        "options": {}
+      },
+      "name": "Acknowledge Slack",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [460, 180],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            { "name": "user_id", "value": "={{ $json.body.user_id }}" },
+            { "name": "user_name", "value": "={{ $json.body.user_name }}" },
+            { "name": "channel_id", "value": "={{ $json.body.channel_id }}" },
+            { "name": "request_text", "value": "={{ $json.body.text }}" },
+            { "name": "rejection_count", "value": "=0" }
+          ]
+        }
+      },
+      "name": "Extract Slack Data",
+      "type": "n8n-nodes-base.set",
+      "position": [460, 340],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $node['Extract Slack Data'].json.request_text }}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "name": "Has Content",
+      "type": "n8n-nodes-base.if",
+      "position": [680, 340],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.SLACK_BOT_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"{{ $node['Extract Slack Data'].json.channel_id }}\",\n  \"text\": \"<@{{ $node['Extract Slack Data'].json.user_id }}> It looks like you sent an empty request. Please use the command like this:\\n`/updateplaybook [Describe what changed and what the new information is.]`\\nNo need to specify the section; I will find that myself.\"\n}",
+        "options": {}
+      },
+      "name": "Prompt for Content",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [900, 500],
+      "typeVersion": 4
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "documentId": { "value": "={{ $env.GOOGLE_DOC_ID }}" }
+      },
+      "name": "Read Google Doc",
+      "type": "n8n-nodes-base.googleDocs",
+      "position": [900, 240],
+      "typeVersion": 2,
+      "notes": "Requires Google Docs OAuth2 API credential connected in n8n Credentials."
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "system_prompt",
+              "value": "You are a playbook maintenance agent. Your job is to keep a company playbook accurate and up to date.\n\nYou will receive:\n1. An update request from a team member describing what has changed\n2. The full current content of the company playbook\n\nYour responsibilities:\n\nSTEP 1 - DETERMINE ADD OR UPDATE\nRead the update request carefully. Then read the full playbook content.\nDo NOT ask the user whether this is an ADD or UPDATE; determine this yourself by comparing the request against the existing playbook.\n- If the topic or information already exists somewhere in the playbook; this is an UPDATE. You will replace the existing content with the new content.\n- If the topic does not exist anywhere in the playbook; this is an ADD. You will add new content in the most relevant section.\nNever ask the user to clarify ADD vs UPDATE; always make this determination yourself.\n\nSTEP 2 - IDENTIFY THE SECTION\nRead the playbook structure and identify exactly which section this change belongs to based on the heading structure.\nFor an UPDATE; identify the section containing the existing content to be replaced.\nFor an ADD; identify the most relevant section where the new content should be inserted.\nIf you genuinely cannot identify the section after reading the full playbook; flag this and ask the user to specify the section name only.\n\nSTEP 3 - MATCH THE WRITING STYLE\nRead the existing content in the identified section carefully.\nMatch the writing style exactly; if the section uses paragraphs write in paragraphs, if it uses bullet points use bullet points, if it uses numbered steps use numbered steps.\nMatch the tone, formality level and sentence length of that section.\nThe edit must look like it was written by the same person who wrote the rest of the section.\n\nSTEP 4 - PREPARE THE DRAFT\nPrepare the exact text that will be added or will replace the existing content.\n\nFORMAT YOUR RESPONSE EXACTLY LIKE THIS WITH NO DEVIATION:\n---DRAFT START---\nSECTION: [exact section name as it appears in the playbook]\nCHANGE TYPE: [ADD or UPDATE]\nCURRENT TEXT: [exact current text being replaced, or N/A if adding new content]\nPROPOSED TEXT: [the new or replacement content written in matching style]\nREASON: [one sentence explaining what changed and why]\n---DRAFT END---\n\nIF YOU CANNOT IDENTIFY THE SECTION:\n---CLARIFICATION NEEDED---\n[Ask only for the section name; nothing else]\n---CLARIFICATION END---\n\nREJECTION HANDLING:\nIf you receive a rejection with feedback, read the feedback carefully and prepare a revised draft addressing the specific concern raised.\nIf the rejection count provided is 2 or more, respond with:\n---MAX REJECTIONS REACHED---\nThis update has been rejected twice. Please make this edit manually or contact your admin for assistance.\n---MAX REJECTIONS END---"
+            }
+          ]
+        }
+      },
+      "name": "System Prompt",
+      "type": "n8n-nodes-base.set",
+      "position": [900, 100],
+      "typeVersion": 1,
+      "notes": "This is the brain of the agent. Edit this system prompt to adjust how Claude identifies sections, determines ADD vs UPDATE, matches writing style or formats its draft."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key", "value": "={{ $env.CLAUDE_API_KEY }}" },
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-opus-4-6\",\n  \"max_tokens\": 2000,\n  \"system\": {{ JSON.stringify($node['System Prompt'].json.system_prompt) }},\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"UPDATE REQUEST FROM <@\" + $node['Extract Slack Data'].json.user_id + \">:\\n\" + $node['Extract Slack Data'].json.request_text + \"\\n\\nCURRENT PLAYBOOK CONTENT:\\n\" + JSON.stringify($node['Read Google Doc'].json.body)\n    }\n  ]\n}",
+        "options": {}
+      },
+      "name": "Claude API - Draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1120, 200],
+      "typeVersion": 4
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.SLACK_BOT_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"{{ $node['Extract Slack Data'].json.channel_id }}\",\n  \"blocks\": [\n    {\n      \"type\": \"section\",\n      \"text\": { \"type\": \"mrkdwn\", \"text\": \"<@{{ $node['Extract Slack Data'].json.user_id }}> Here is the draft based on your request. Please review and approve or reject below.\" }\n    },\n    {\n      \"type\": \"section\",\n      \"text\": { \"type\": \"mrkdwn\", \"text\": \"*Your Request:*\\n{{ $node['Extract Slack Data'].json.request_text }}\" }\n    },\n    {\n      \"type\": \"section\",\n      \"text\": { \"type\": \"mrkdwn\", \"text\": \"*Draft Prepared by Agent:*\\n{{ $node['Claude API - Draft'].json.content[0].text }}\" }\n    },\n    {\n      \"type\": \"actions\",\n      \"block_id\": \"approval_actions\",\n      \"elements\": [\n        { \"type\": \"button\", \"text\": { \"type\": \"plain_text\", \"text\": \"✅ Approve\" }, \"style\": \"primary\", \"action_id\": \"approve_draft\", \"value\": \"approve\" },\n        { \"type\": \"button\", \"text\": { \"type\": \"plain_text\", \"text\": \"❌ Reject\" }, \"style\": \"danger\", \"action_id\": \"reject_draft\", \"value\": \"reject\" }\n      ]\n    }\n  ]\n}",
+        "options": {}
+      },
+      "name": "Post Draft with Buttons",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1340, 200],
+      "typeVersion": 4,
+      "notes": "Posts draft with Approve and Reject buttons. Requires Interactivity enabled in your Slack app with the Button Response Webhook URL set under Interactivity & Shortcuts."
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "playbook-button-response",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Button Response Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [240, 700],
+      "typeVersion": 1,
+      "notes": "Copy this webhook URL and paste it into your Slack app Interactivity & Shortcuts → Request URL at api.slack.com"
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "Got it; processing your response.",
+        "options": {}
+      },
+      "name": "Acknowledge Button Click",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [460, 580],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            { "name": "action_value", "value": "={{ JSON.parse($json.body.payload).actions[0].value }}" },
+            { "name": "button_user_id", "value": "={{ JSON.parse($json.body.payload).user.id }}" },
+            { "name": "button_channel_id", "value": "={{ JSON.parse($json.body.payload).channel.id }}" },
+            { "name": "button_thread_ts", "value": "={{ JSON.parse($json.body.payload).message.ts }}" },
+            { "name": "original_draft", "value": "={{ JSON.parse($json.body.payload).message.blocks[2].text.text }}" }
+          ]
+        }
+      },
+      "name": "Extract Button Data",
+      "type": "n8n-nodes-base.set",
+      "position": [460, 720],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $node['Extract Button Data'].json.action_value }}",
+              "operation": "equals",
+              "value2": "approve"
+            }
+          ]
+        }
+      },
+      "name": "Check Button Action",
+      "type": "n8n-nodes-base.if",
+      "position": [680, 720],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key", "value": "={{ $env.CLAUDE_API_KEY }}" },
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-opus-4-6\",\n  \"max_tokens\": 2000,\n  \"system\": \"You are a Google Docs API assistant. You receive an approved playbook change and the current document content. Produce the exact batchUpdate request body needed to make the change using Google Docs API format. Return ONLY a valid JSON array for the requests field. No explanation, no markdown, no code fences; just the raw JSON array.\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"APPROVED CHANGE:\\n\" + $node['Extract Button Data'].json.original_draft + \"\\n\\nCURRENT DOC CONTENT:\\n\" + JSON.stringify($node['Read Google Doc'].json.body)\n    }\n  ]\n}",
+        "options": {}
+      },
+      "name": "Claude API - Prepare Edit",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [900, 620],
+      "typeVersion": 4
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": { "value": "={{ $env.GOOGLE_DOC_ID }}" },
+        "updateFields": {
+          "requests": "={{ JSON.parse($node['Claude API - Prepare Edit'].json.content[0].text) }}"
+        }
+      },
+      "name": "Write to Google Doc",
+      "type": "n8n-nodes-base.googleDocs",
+      "position": [1120, 620],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.SLACK_BOT_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"{{ $node['Extract Button Data'].json.button_channel_id }}\",\n  \"thread_ts\": \"{{ $node['Extract Button Data'].json.button_thread_ts }}\",\n  \"text\": \"<@{{ $node['Extract Button Data'].json.button_user_id }}> Done. The playbook has been updated successfully.\\n\\n*Section updated:* {{ $node['Extract Button Data'].json.original_draft.match(/SECTION: (.+)/)?.[1] || 'See playbook' }}\\n*Change type:* {{ $node['Extract Button Data'].json.original_draft.match(/CHANGE TYPE: (.+)/)?.[1] || 'See playbook' }}\\n\\nView the updated playbook: https://docs.google.com/document/d/{{ $env.GOOGLE_DOC_ID }}/edit\"\n}",
+        "options": {}
+      },
+      "name": "Confirm Update in Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1340, 620],
+      "typeVersion": 4
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.SLACK_BOT_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"{{ $node['Extract Button Data'].json.button_channel_id }}\",\n  \"thread_ts\": \"{{ $node['Extract Button Data'].json.button_thread_ts }}\",\n  \"text\": \"<@{{ $node['Extract Button Data'].json.button_user_id }}> Got it; that draft has been rejected. Please reply in this thread and tell me specifically what was wrong. Was it the wrong section, incorrect content or the wrong writing style?\"\n}",
+        "options": {}
+      },
+      "name": "Ask for Clarification",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [900, 860],
+      "typeVersion": 4
+    },
+    {
+      "parameters": {
+        "triggerOn": "message",
+        "channelId": "={{ $env.SLACK_CHANNEL_ID }}",
+        "options": {}
+      },
+      "name": "Listen for Clarification Reply",
+      "type": "n8n-nodes-base.slackTrigger",
+      "position": [240, 1000],
+      "typeVersion": 1,
+      "notes": "Listens for clarification text after a rejection. Must be activated separately."
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [{ "name": "rejection_count", "value": "=1" }]
+        }
+      },
+      "name": "Increment Rejection Count",
+      "type": "n8n-nodes-base.set",
+      "position": [460, 1000],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $node['Increment Rejection Count'].json.rejection_count }}",
+              "operation": "largerEqual",
+              "value2": 2
+            }
+          ]
+        }
+      },
+      "name": "Max Rejections Check",
+      "type": "n8n-nodes-base.if",
+      "position": [680, 1000],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key", "value": "={{ $env.CLAUDE_API_KEY }}" },
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-opus-4-6\",\n  \"max_tokens\": 2000,\n  \"system\": {{ JSON.stringify($node['System Prompt'].json.system_prompt) }},\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"ORIGINAL REQUEST:\\n\" + $node['Extract Slack Data'].json.request_text + \"\\n\\nPREVIOUS DRAFT THAT WAS REJECTED:\\n\" + $node['Extract Button Data'].json.original_draft + \"\\n\\nREJECTION FEEDBACK FROM USER:\\n\" + $node['Listen for Clarification Reply'].json.text + \"\\n\\nREJECTION COUNT: 1\\n\\nCURRENT PLAYBOOK CONTENT:\\n\" + JSON.stringify($node['Read Google Doc'].json.body)\n    }\n  ]\n}",
+        "options": {}
+      },
+      "name": "Claude API - Revised Draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [900, 1100],
+      "typeVersion": 4
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.SLACK_BOT_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"{{ $env.SLACK_CHANNEL_ID }}\",\n  \"blocks\": [\n    {\n      \"type\": \"section\",\n      \"text\": { \"type\": \"mrkdwn\", \"text\": \"<@{{ $node['Listen for Clarification Reply'].json.user }}> Here is the revised draft based on your feedback.\" }\n    },\n    {\n      \"type\": \"section\",\n      \"text\": { \"type\": \"mrkdwn\", \"text\": \"*Revised Draft:*\\n{{ $node['Claude API - Revised Draft'].json.content[0].text }}\" }\n    },\n    {\n      \"type\": \"actions\",\n      \"block_id\": \"approval_actions_revised\",\n      \"elements\": [\n        { \"type\": \"button\", \"text\": { \"type\": \"plain_text\", \"text\": \"✅ Approve\" }, \"style\": \"primary\", \"action_id\": \"approve_draft\", \"value\": \"approve\" },\n        { \"type\": \"button\", \"text\": { \"type\": \"plain_text\", \"text\": \"❌ Reject\" }, \"style\": \"danger\", \"action_id\": \"reject_draft_final\", \"value\": \"reject_final\" }\n      ]\n    }\n  ]\n}",
+        "options": {}
+      },
+      "name": "Post Revised Draft with Buttons",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1120, 1100],
+      "typeVersion": 4
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.SLACK_BOT_TOKEN }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"{{ $env.SLACK_CHANNEL_ID }}\",\n  \"text\": \"<@{{ $node['Listen for Clarification Reply'].json.user }}> This update has been rejected twice. No changes have been made to the playbook. Please make this edit manually or contact your admin for assistance.\"\n}",
+        "options": {}
+      },
+      "name": "Max Rejections Notice",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [900, 880],
+      "typeVersion": 4
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{ $env.GOOGLE_SHEET_ID }}",
+        "sheetName": "Change Log",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Timestamp": "={{ new Date().toISOString() }}",
+            "Submitted By": "={{ $node['Extract Slack Data'].json.user_name }}",
+            "Request": "={{ $node['Extract Slack Data'].json.request_text }}",
+            "Section": "={{ $node['Extract Button Data'].json.original_draft.match(/SECTION: (.+)/)?.[1] || 'Unknown' }}",
+            "Change Type": "={{ $node['Extract Button Data'].json.original_draft.match(/CHANGE TYPE: (.+)/)?.[1] || 'Unknown' }}",
+            "Status": "APPROVED AND EXECUTED"
+          }
+        },
+        "options": {}
+      },
+      "name": "Log to Google Sheet (Optional)",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [1340, 500],
+      "typeVersion": 4,
+      "notes": "OPTIONAL: Disconnect this node if you do not want a change log. Google Docs version history tracks all changes natively."
+    }
+  ],
+  "connections": {
+    "Slash Command Trigger": { "main": [[{ "node": "Acknowledge Slack", "type": "main", "index": 0 }, { "node": "Extract Slack Data", "type": "main", "index": 0 }]] },
+    "Extract Slack Data": { "main": [[{ "node": "Has Content", "type": "main", "index": 0 }]] },
+    "Has Content": { "main": [[{ "node": "System Prompt", "type": "main", "index": 0 }], [{ "node": "Prompt for Content", "type": "main", "index": 0 }]] },
+    "System Prompt": { "main": [[{ "node": "Read Google Doc", "type": "main", "index": 0 }]] },
+    "Read Google Doc": { "main": [[{ "node": "Claude API - Draft", "type": "main", "index": 0 }]] },
+    "Claude API - Draft": { "main": [[{ "node": "Post Draft with Buttons", "type": "main", "index": 0 }]] },
+    "Button Response Webhook": { "main": [[{ "node": "Acknowledge Button Click", "type": "main", "index": 0 }, { "node": "Extract Button Data", "type": "main", "index": 0 }]] },
+    "Extract Button Data": { "main": [[{ "node": "Check Button Action", "type": "main", "index": 0 }]] },
+    "Check Button Action": { "main": [[{ "node": "Claude API - Prepare Edit", "type": "main", "index": 0 }], [{ "node": "Ask for Clarification", "type": "main", "index": 0 }]] },
+    "Claude API - Prepare Edit": { "main": [[{ "node": "Write to Google Doc", "type": "main", "index": 0 }]] },
+    "Write to Google Doc": { "main": [[{ "node": "Confirm Update in Slack", "type": "main", "index": 0 }], [{ "node": "Log to Google Sheet (Optional)", "type": "main", "index": 0 }]] },
+    "Listen for Clarification Reply": { "main": [[{ "node": "Increment Rejection Count", "type": "main", "index": 0 }]] },
+    "Increment Rejection Count": { "main": [[{ "node": "Max Rejections Check", "type": "main", "index": 0 }]] },
+    "Max Rejections Check": { "main": [[{ "node": "Max Rejections Notice", "type": "main", "index": 0 }], [{ "node": "Claude API - Revised Draft", "type": "main", "index": 0 }]] },
+    "Claude API - Revised Draft": { "main": [[{ "node": "Post Revised Draft with Buttons", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}
